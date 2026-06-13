@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtualenv
+.venv/
+venv/
+env/
+
+# Dane i modele
+data/*
+!data/.gitkeep
+*.pt
+*.pth
+*.pkl
+*.npz
+
+# Notebooki
+.ipynb_checkpoints/
+
+# IDE / system
+.vscode/
+.idea/
+.DS_Store
