@@ -49,8 +49,21 @@ gnn-network-defense/
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+pip install torch_geometric
+```
+
+Po instalacji wygeneruj dataset (jednorazowo, zajmuje kilka minut):
+
+```bash
+python -m src.dataset
+```
+
+Plik zostanie zapisany do `data/dataset.pt`. Parametry można nadpisać, np.:
+
+```bash
+python -m src.dataset --n_graphs 200 --n_nodes 50 --n_sim 30 --seed 42
 ```
 
 ## Podział pracy
