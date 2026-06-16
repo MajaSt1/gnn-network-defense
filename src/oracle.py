@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from .attack import simulate_attack
 
-__all__ = ['monte_carlo_score', 'node_marginal_gains', 'greedy_oracle']
+__all__ = ['monte_carlo_score', 'node_marginal_gains_crn', 'greedy_oracle']
 
 
 def monte_carlo_score(
@@ -41,31 +41,62 @@ def monte_carlo_score(
     return float(np.mean(totals))
 
 
-def node_marginal_gains(
+def node_marginal_gains_crn(
     G: nx.Graph,
-    n_sim: int = 50,
-    **attack_kwargs,
+    n_sim: int = 150,
+    beta: float = 0.3,
+    resistance: float = 1.0,
+    delay: int = 2,
+    max_steps: int = 100,
+    model: str = 'SI',
+    gamma: float = 0.05,
+    base_seed: int = 0,
 ) -> np.ndarray:
-    """Indywidualny gain z utwardzenia każdego węzła osobno.
+    """Gain z utwardzenia węzła liczony metodą *common random numbers* (CRN).
 
-    gain[v] = zarażeni_bez_obrony − zarażeni_gdy_tylko_v_jest_utwardzony
+    DLACZEGO TO ISTNIEJE: naiwne liczenie gainu porównuje baseline
+    i wariant "v utwardzony" na NIEZALEŻNYCH losowaniach ataku. Efekt
+    utwardzenia jednego węzła z n jest mały i tonie w wariancji Monte Carlo
+    — etykiety wychodzą prawie nieskorelowane same ze sobą (nie da się ich
+    nauczyć). CRN losuje JEDEN wspólny zestaw `n_sim` ziaren i mierzy
+    baseline oraz każdy wariant "v utwardzony" na TYCH SAMYCH przebiegach.
+    Wspólny szum się skraca, zostaje czysty efekt obrony.
 
-    Wartości ujemne (szum Monte Carlo) są ucinane do zera.
+    Dodatkowo domyślnie resistance=1.0 (pełne uodpornienie węzła) — sygnał
+    jest wtedy wyraźniejszy niż przy częściowej odporności.
+
+    gain[v] = E[zarażeni_bez_obrony − zarażeni_gdy_v_utwardzony]  (te same ziarna)
 
     Args:
-        G:               Graf NetworkX.
-        n_sim:           Liczba symulacji Monte Carlo na węzeł.
-        **attack_kwargs: Parametry przekazywane do monte_carlo_score.
+        G:          Graf NetworkX.
+        n_sim:      Liczba wspólnych przebiegów Monte Carlo.
+        beta:       Prawdopodobieństwo zarażenia przez krawędź.
+        resistance: Redukcja zarażalności utwardzonego węzła (1.0 = pełna).
+        delay:      Opóźnienie rozsiewania utwardzonego węzła.
+        max_steps:  Maksymalna liczba kroków symulacji.
+        model:      'SI' lub 'SIR'.
+        gamma:      Częstość zdrowienia (tylko SIR).
+        base_seed:  Ziarno generujące wspólny zestaw ziaren symulacji.
 
     Returns:
-        Tablica float32 kształtu (n,).
+        Tablica float32 kształtu (n,), wartości ujemne ucięte do zera.
     """
     n = G.number_of_nodes()
-    baseline = monte_carlo_score(G, hardened=frozenset(), n_sim=n_sim, **attack_kwargs)
+    seeds = np.random.default_rng(base_seed).integers(0, 2**31, size=n_sim)
+    ak = dict(model=model, beta=beta, gamma=gamma,
+              resistance=resistance, delay=delay, max_steps=max_steps)
+
+    baseline = np.array([
+        simulate_attack(G, hardened=frozenset(), seed=int(s), **ak)['total_infected']
+        for s in seeds
+    ])
     gains = np.zeros(n, dtype=np.float32)
     for v in range(n):
-        score = monte_carlo_score(G, hardened=frozenset({v}), n_sim=n_sim, **attack_kwargs)
-        gains[v] = baseline - score
+        with_v = np.array([
+            simulate_attack(G, hardened=frozenset({v}), seed=int(s), **ak)['total_infected']
+            for s in seeds
+        ])
+        gains[v] = float((baseline - with_v).mean())
     return np.maximum(gains, 0.0)
 
 
