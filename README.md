@@ -15,10 +15,27 @@ podejmując decyzję natychmiast, zamiast w sekundy/minuty.
 
 ### Parametry bezpieczeństwa wierzchołka
 
-Utwardzony węzeł zyskuje **dwa** zabezpieczenia:
+Zgodnie z treścią zadania utwardzony węzeł zyskuje **dwa** parametry bezpieczeństwa,
+które działają niezależnie:
 
-1. **Odporność na infekcję** — niższe prawdopodobieństwo zarażenia od sąsiada (`p → p·(1−r)`).
-2. **Opóźnienie propagacji** — nawet po zarażeniu przekazuje atak dalej z opóźnieniem.
+1. **Odporność na infekcję** (`resistance`) — niższe prawdopodobieństwo zarażenia
+   od sąsiada (`p → p·(1−r)`). To „twarda bariera": ogranicza, *które* węzły padną.
+2. **Opóźnienie propagacji** (`delay`) — nawet po zarażeniu utwardzony węzeł
+   przekazuje atak dalej dopiero po kilku krokach. To „spowalniacz": nie zmienia
+   finalnego zasięgu, ale *opóźnia* rozprzestrzenianie się ataku.
+
+Domyślnie `resistance=0.6` (bariera **częściowa**, nie pełna) — to celowy wybór:
+przy pełnej odporności utwardzony węzeł nigdy się nie zaraża, więc opóźnienie nie
+miałoby czego spowalniać. Częściowa odporność sprawia, że *oba* parametry są aktywne.
+
+### Miara jakości obrony
+
+Główną miarą jest **liczba węzłów dotkniętych atakiem do kroku T** (`affected_within_T`,
+domyślnie T=10) — mniej = wolniejsza propagacja = lepsza obrona. Ta metryka jest
+czuła na **oba** parametry: barierę (mniej węzłów pada) i opóźnienie (atak rozchodzi
+się wolniej, więc do kroku T dociera do mniejszej liczby węzłów). Raportujemy też
+**finalny zasięg** ataku (`total_infected`) jako metrykę pomocniczą — reaguje on
+tylko na barierę, bo opóźnienie nie zmienia tego, ilu węzłów ostatecznie padnie.
 
 ### Główne założenia
 
@@ -32,20 +49,23 @@ Utwardzony węzeł zyskuje **dwa** zabezpieczenia:
 
 ### Wyniki (k=5, grafy dwuklastrowe)
 
-Średnia liczba zarażonych węzłów (mniej = lepsza obrona):
+Główna miara: średnia liczba węzłów **dotkniętych atakiem do kroku T=10**
+(mniej = wolniejsza propagacja). Dla kontekstu podajemy też finalny zasięg ataku:
 
-| strategia | zarażeni | czas decyzji |
-|-----------|---------:|-------------:|
-| brak obrony   | 34.9 | — |
-| losowo        | 27.9 | 0.03 ms |
-| **degree**    | 22.0 | 0.02 ms |
-| **GNN**       | **16.6** | 0.73 ms |
-| betweenness   | 15.5 | 2.41 ms |
-| wyrocznia     | 15.0 | 12 208 ms |
+| strategia | dotknięci do T | finalny zasięg | czas decyzji |
+|-----------|---------------:|---------------:|-------------:|
+| brak obrony   | 33.9 | 35.7 | — |
+| losowo        | 28.2 | 34.6 | 0.04 ms |
+| **degree**    | 22.6 | 31.6 | 0.03 ms |
+| **GNN**       | **19.4** | 26.5 | 0.66 ms |
+| betweenness   | 18.4 | 25.2 | 2.35 ms |
+| wyrocznia     | 19.2 | 27.0 | 16 247 ms |
 
-GNN bije naiwny baseline `degree` o ~5 węzłów i dorównuje wyroczni, podejmując
-decyzję **~16 000× szybciej** (0.73 ms vs 12 s). Sieć sama nauczyła się z cech,
-że kluczowe są węzły mostowe — czego `degree` nie widzi.
+GNN bije naiwny baseline `degree` o ~3 węzły i **dorównuje wyroczni** (19.4 vs 19.2),
+podejmując decyzję **~24 000× szybciej** (0.66 ms vs ~16 s). Sieć sama nauczyła się
+z cech, że kluczowe są węzły mostowe — czego `degree` nie widzi. Jedna ręczna miara,
+betweenness, jest odrobinę lepsza (18.4), ale to gotowa reguła; model nie dostał jej
+z góry, tylko sam doszedł do roli węzłów mostowych z surowych cech.
 
 ## Struktura projektu
 

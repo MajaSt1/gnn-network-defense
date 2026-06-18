@@ -16,9 +16,16 @@ def monte_carlo_score(
     G: nx.Graph,
     hardened: frozenset = frozenset(),
     n_sim: int = 50,
+    metric: str = 'affected_within_T',
     **attack_kwargs,
 ) -> float:
-    """Szacowana oczekiwana liczba zarażonych węzłów (niższa = lepsza obrona).
+    """Szacowana oczekiwana wartość metryki ataku (niższa = lepsza obrona).
+
+    Domyślnie metryką jest 'affected_within_T' — liczba węzłów dotkniętych do
+    kroku T. Jest czuła na OBA parametry obrony: barierę (resistance, mniej
+    węzłów pada) i opóźnienie (delay, atak rozchodzi się wolniej, więc do kroku
+    T dociera do mniejszej liczby węzłów). Metryka 'total_infected' (finalny
+    zasięg) reaguje tylko na barierę — delay jej nie zmienia.
 
     Każda symulacja losuje nowy węzeł startowy, więc wynik odzwierciedla
     podatność całego grafu, nie jednego punktu wejścia.
@@ -28,14 +35,16 @@ def monte_carlo_score(
         G:               Graf NetworkX.
         hardened:        Zbiór indeksów utwardzonych węzłów.
         n_sim:           Liczba symulacji Monte Carlo.
+        metric:          Klucz wyniku simulate_attack do uśrednienia
+                         ('affected_within_T' lub 'total_infected').
         **attack_kwargs: Parametry przekazywane do simulate_attack.
 
     Returns:
-        Średnia liczba zarażonych węzłów (float).
+        Średnia wartość wybranej metryki (float).
     """
     kwargs = {k: v for k, v in attack_kwargs.items() if k != 'seed'}
     totals = [
-        simulate_attack(G, hardened=hardened, **kwargs)['total_infected']
+        simulate_attack(G, hardened=hardened, **kwargs)[metric]
         for _ in range(n_sim)
     ]
     return float(np.mean(totals))
@@ -45,11 +54,13 @@ def node_marginal_gains_crn(
     G: nx.Graph,
     n_sim: int = 150,
     beta: float = 0.3,
-    resistance: float = 1.0,
-    delay: int = 2,
+    resistance: float = 0.6,
+    delay: int = 5,
+    horizon: int = 10,
     max_steps: int = 100,
     model: str = 'SI',
     gamma: float = 0.05,
+    metric: str = 'affected_within_T',
     base_seed: int = 0,
 ) -> np.ndarray:
     """Gain z utwardzenia węzła liczony metodą *common random numbers* (CRN).
@@ -62,20 +73,25 @@ def node_marginal_gains_crn(
     baseline oraz każdy wariant "v utwardzony" na TYCH SAMYCH przebiegach.
     Wspólny szum się skraca, zostaje czysty efekt obrony.
 
-    Dodatkowo domyślnie resistance=1.0 (pełne uodpornienie węzła) — sygnał
-    jest wtedy wyraźniejszy niż przy częściowej odporności.
+    Metryką jest domyślnie 'affected_within_T' (liczba węzłów dotkniętych do
+    kroku T) — reaguje na OBA parametry obrony. Przy resistance=0.6 utwardzony
+    węzeł bywa zarażony, więc parametr delay realnie spowalnia rozsiewanie i ma
+    wpływ na etykiety (przy resistance=1.0 delay byłby martwy).
 
-    gain[v] = E[zarażeni_bez_obrony − zarażeni_gdy_v_utwardzony]  (te same ziarna)
+    gain[v] = E[metryka_bez_obrony − metryka_gdy_v_utwardzony]  (te same ziarna)
 
     Args:
         G:          Graf NetworkX.
         n_sim:      Liczba wspólnych przebiegów Monte Carlo.
         beta:       Prawdopodobieństwo zarażenia przez krawędź.
-        resistance: Redukcja zarażalności utwardzonego węzła (1.0 = pełna).
+        resistance: Redukcja zarażalności utwardzonego węzła (0.6 = częściowa,
+                    pozwala by delay też działał).
         delay:      Opóźnienie rozsiewania utwardzonego węzła.
+        horizon:    Horyzont T metryki 'affected_within_T'.
         max_steps:  Maksymalna liczba kroków symulacji.
         model:      'SI' lub 'SIR'.
         gamma:      Częstość zdrowienia (tylko SIR).
+        metric:     Metryka ataku użyta do liczenia gainu.
         base_seed:  Ziarno generujące wspólny zestaw ziaren symulacji.
 
     Returns:
@@ -83,17 +99,17 @@ def node_marginal_gains_crn(
     """
     n = G.number_of_nodes()
     seeds = np.random.default_rng(base_seed).integers(0, 2**31, size=n_sim)
-    ak = dict(model=model, beta=beta, gamma=gamma,
-              resistance=resistance, delay=delay, max_steps=max_steps)
+    ak = dict(model=model, beta=beta, gamma=gamma, resistance=resistance,
+              delay=delay, horizon=horizon, max_steps=max_steps)
 
     baseline = np.array([
-        simulate_attack(G, hardened=frozenset(), seed=int(s), **ak)['total_infected']
+        simulate_attack(G, hardened=frozenset(), seed=int(s), **ak)[metric]
         for s in seeds
     ])
     gains = np.zeros(n, dtype=np.float32)
     for v in range(n):
         with_v = np.array([
-            simulate_attack(G, hardened=frozenset({v}), seed=int(s), **ak)['total_infected']
+            simulate_attack(G, hardened=frozenset({v}), seed=int(s), **ak)[metric]
             for s in seeds
         ])
         gains[v] = float((baseline - with_v).mean())

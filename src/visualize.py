@@ -31,12 +31,16 @@ def simulate_attack_trace(
     model: str = 'SI',
     beta: float = 0.3,
     gamma: float = 0.05,
-    resistance: float = 1.0,
-    delay: int = 2,
+    resistance: float = 0.6,
+    delay: int = 5,
+    horizon: int = 10,
     max_steps: int = 100,
     seed: Optional[int] = None,
 ) -> List[np.ndarray]:
     """Jak simulate_attack, ale zwraca PEŁNĄ historię stanów do animacji.
+
+    `horizon` jest przyjmowany dla zgodności z sygnaturą simulate_attack
+    (animacja ma pełną historię, więc nie liczy metryki do kroku T).
 
     Returns:
         Lista tablic stanów (po jednej na krok). Każda tablica ma kształt (n,)

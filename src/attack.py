@@ -16,18 +16,26 @@ def simulate_attack(
     model: str = 'SI',
     beta: float = 0.3,
     gamma: float = 0.05,
-    resistance: float = 0.7,
-    delay: int = 2,
+    resistance: float = 0.6,
+    delay: int = 5,
+    horizon: int = 10,
     max_steps: int = 100,
     seed: Optional[int] = None,
 ) -> dict:
     """Symulacja ataku SI lub SIR z uwzględnieniem utwardzonych węzłów.
 
-    Efekty obrony działają niezależnie:
+    DWA PARAMETRY BEZPIECZEŃSTWA WĘZŁA (działają niezależnie):
         - resistance: prawdopodobieństwo zarażenia utwardzonego węzła spada do
-          beta * (1 - resistance).
-        - delay: zarażony utwardzony węzeł zaczyna rozsiewać wirusa dopiero
-          po `delay` krokach.
+          beta * (1 - resistance). To "twarda bariera" — ogranicza, KTÓRE węzły
+          w ogóle padną.
+        - delay: zarażony utwardzony węzeł zaczyna rozsiewać wirusa dopiero po
+          `delay` krokach. To "spowalniacz" — nie zmienia finalnego zasięgu, ale
+          OPÓŹNIA propagację (mniej węzłów dotkniętych we wczesnych krokach).
+
+    Aby OBA parametry były aktywne, resistance musi być < 1.0: przy pełnej
+    odporności utwardzony węzeł nigdy się nie zaraża, więc delay nie ma czego
+    opóźniać. Stąd domyślne resistance=0.6 (częściowa bariera) — utwardzony
+    węzeł czasem pada, a wtedy delay realnie spowalnia rozsiewanie dalej.
 
     Args:
         G:          Graf NetworkX (węzły 0..n-1).
@@ -36,8 +44,11 @@ def simulate_attack(
         model:      'SI' (brak zdrowienia) lub 'SIR' (zdrowienie z częstością gamma).
         beta:       Bazowe prawdopodobieństwo zarażenia przez krawędź na krok.
         gamma:      Prawdopodobieństwo wyzdrowienia na krok (tylko SIR).
-        resistance: Redukcja prawdopodobieństwa zarażenia dla utwardzonych węzłów.
+        resistance: Redukcja prawdopodobieństwa zarażenia dla utwardzonych węzłów
+                    (0.6 = bariera częściowa; pozwala, by delay też działał).
         delay:      Kroki opóźnienia rozsiewania dla zarażonego utwardzonego węzła.
+        horizon:    Horyzont T do metryki 'affected_within_T' — ile węzłów atak
+                    dotknął do kroku T włącznie (miara SZYBKOŚCI propagacji).
         max_steps:  Maksymalna liczba kroków symulacji.
         seed:       Ziarno losowości.
 
@@ -45,6 +56,8 @@ def simulate_attack(
         Słownik z kluczami:
             'infected_per_step' — liczba aktualnie zarażonych węzłów w każdym kroku,
             'total_infected'    — łączna liczba węzłów, które kiedykolwiek były zarażone,
+            'affected_within_T' — liczba węzłów dotkniętych atakiem do kroku T
+                                  (czuła na OBA parametry: barierę i opóźnienie),
             'steps'             — liczba wykonanych kroków.
     """
     rng = np.random.default_rng(seed)
@@ -65,6 +78,8 @@ def simulate_attack(
     adj = [list(G.neighbors(v)) for v in range(n)]
 
     infected_per_step = [1]
+    # liczba węzłów dotkniętych do kroku T (włącznie); None dopóki nie dojdziemy do T
+    affected_within_T = None
 
     for step in range(1, max_steps + 1):
         active = list(np.where(state == 1)[0])
@@ -96,6 +111,10 @@ def simulate_attack(
 
         infected_per_step.append(int(np.sum(state == 1)))
 
+        # snapshot dotkniętych (kiedykolwiek zarażonych) na koniec kroku T
+        if step == horizon:
+            affected_within_T = int(ever_infected.sum())
+
         active_after = list(np.where(state == 1)[0])
 
         if model == 'SIR':
@@ -114,8 +133,14 @@ def simulate_attack(
                 if not has_pending:
                     break
 
+    # atak wygasł przed krokiem T -> nic więcej nie przybędzie, więc dotknięci
+    # do T to po prostu finalna liczba dotkniętych
+    if affected_within_T is None:
+        affected_within_T = int(ever_infected.sum())
+
     return {
         'infected_per_step': infected_per_step,
         'total_infected': int(ever_infected.sum()),
+        'affected_within_T': affected_within_T,
         'steps': len(infected_per_step),
     }

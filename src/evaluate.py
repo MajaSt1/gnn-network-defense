@@ -4,13 +4,16 @@ Odpowiedzialność (Osoba B):
 - porównanie obrony wskazanej przez GNN z:
     * wyrocznią (górna granica jakości),
     * baseline'ami: degree, betweenness, losowo,
-- metryki: zasięg i szybkość propagacji ataku, czas decyzji,
+- metryki: szybkość propagacji (dotknięci do kroku T) oraz finalny zasięg
+  ataku, a także czas decyzji,
 - generowanie wykresów porównawczych.
 
-POMYSŁ: każda strategia wybiera k węzłów do utwardzenia. Mierzymy, ilu
-węzłów średnio zarazi atak (Monte Carlo) przy danej obronie — mniej = lepiej.
-GNN powinien zbliżyć się do wyroczni, ale podejmować decyzję natychmiast,
-a nie w sekundy/minuty.
+POMYSŁ: każda strategia wybiera k węzłów do utwardzenia. Główną miarą jakości
+obrony jest liczba węzłów dotkniętych atakiem DO KROKU T ('affected_within_T',
+mniej = wolniejsza propagacja = lepiej) — reaguje na oba parametry obrony
+(barierę resistance i opóźnienie delay). Raportujemy też finalny zasięg
+('total_infected'). GNN powinien zbliżyć się do wyroczni, ale podejmować
+decyzję natychmiast, a nie w sekundy/minuty.
 """
 from __future__ import annotations
 
@@ -37,7 +40,7 @@ __all__ = [
 # powstały etykiety wyroczni.
 DEFAULT_ATTACK = dict(
     model='SI', beta=0.3, gamma=0.05,
-    resistance=1.0, delay=2, max_steps=100,
+    resistance=0.6, delay=5, horizon=10, max_steps=100,
 )
 
 
@@ -62,7 +65,7 @@ def data_to_graph(data: Data) -> nx.Graph:
 def select_gnn(data: Data, G: nx.Graph, model: DefenseGCN, k: int) -> List[int]:
     """k węzłów z najwyższym score przewidzianym przez GNN."""
     scores = predict(model, data).numpy()
-    return list(np.argsort(scores)[::-1][:k])
+    return [int(v) for v in np.argsort(scores)[::-1][:k]]
 
 
 def select_degree(data: Data, G: nx.Graph, model: DefenseGCN, k: int) -> List[int]:
@@ -81,7 +84,7 @@ def select_random(data: Data, G: nx.Graph, model: DefenseGCN, k: int,
                   seed: int | None = None) -> List[int]:
     """k losowych węzłów (dolny punkt odniesienia)."""
     rng = np.random.default_rng(seed)
-    return list(rng.choice(G.number_of_nodes(), size=k, replace=False))
+    return [int(v) for v in rng.choice(G.number_of_nodes(), size=k, replace=False)]
 
 
 def select_oracle(data: Data, G: nx.Graph, model: DefenseGCN, k: int,
@@ -104,13 +107,27 @@ def evaluate_strategy(
     G: nx.Graph,
     hardened: List[int],
     n_sim: int = 50,
-) -> float:
-    """Średnia liczba zarażonych węzłów przy danym zbiorze utwardzonych.
+) -> Tuple[float, float]:
+    """Jakość obrony przy danym zbiorze utwardzonych węzłów.
 
-    Niższa wartość = lepsza obrona. Liczone tą samą metodą Monte Carlo,
+    Niższe wartości = lepsza obrona. Liczone tą samą metodą Monte Carlo,
     której używała wyrocznia, więc wyniki są bezpośrednio porównywalne.
+
+    Returns:
+        affected_T: śr. liczba węzłów dotkniętych do kroku T (główna miara,
+                    czuła na oba parametry obrony),
+        total:      śr. finalny zasięg ataku (metryka pomocnicza).
     """
-    return monte_carlo_score(G, hardened=frozenset(hardened), n_sim=n_sim, **DEFAULT_ATTACK)
+    hardened_set = frozenset(int(v) for v in hardened)
+    affected_T = monte_carlo_score(
+        G, hardened=hardened_set, n_sim=n_sim,
+        metric='affected_within_T', **DEFAULT_ATTACK,
+    )
+    total = monte_carlo_score(
+        G, hardened=hardened_set, n_sim=n_sim,
+        metric='total_infected', **DEFAULT_ATTACK,
+    )
+    return affected_T, total
 
 
 def compare_strategies(
@@ -139,9 +156,11 @@ def compare_strategies(
         seed:           Ziarno dla strategii losowej.
 
     Returns:
-        Słownik: nazwa_strategii -> {'infected': śr. zarażeni,
-                                     'infected_std': odch. std,
-                                     'time': śr. czas decyzji [s]}.
+        Słownik: nazwa_strategii -> {
+            'affected':     śr. dotkniętych do kroku T (główna miara),
+            'affected_std': odch. std tej miary,
+            'total':        śr. finalny zasięg ataku (pomocnicza),
+            'time':         śr. czas decyzji [s]}.
     """
     # baseline bez żadnej obrony — punkt odniesienia "ile zaraża niechroniona sieć"
     strategies: Dict[str, Callable] = {
@@ -158,24 +177,31 @@ def compare_strategies(
 
     # punkt odniesienia: sieć zupełnie bez obrony
     no_def = [evaluate_strategy(G, [], n_sim=n_sim) for G in graphs]
+    aff0 = [a for a, _ in no_def]
+    tot0 = [t for _, t in no_def]
     results['none'] = {
-        'infected': float(np.mean(no_def)),
-        'infected_std': float(np.std(no_def)),
+        'affected': float(np.mean(aff0)),
+        'affected_std': float(np.std(aff0)),
+        'total': float(np.mean(tot0)),
         'time': 0.0,
     }
 
     for name, select_fn in strategies.items():
-        infected: List[float] = []
+        affected: List[float] = []
+        total: List[float] = []
         times: List[float] = []
         for data, G in zip(dataset, graphs):
             t0 = time.perf_counter()
             hardened = select_fn(data, G, model, k)
             times.append(time.perf_counter() - t0)
-            infected.append(evaluate_strategy(G, hardened, n_sim=n_sim))
+            a, t = evaluate_strategy(G, hardened, n_sim=n_sim)
+            affected.append(a)
+            total.append(t)
 
         results[name] = {
-            'infected': float(np.mean(infected)),
-            'infected_std': float(np.std(infected)),
+            'affected': float(np.mean(affected)),
+            'affected_std': float(np.std(affected)),
+            'total': float(np.mean(total)),
             'time': float(np.mean(times)),
         }
 
@@ -183,18 +209,18 @@ def compare_strategies(
 
 
 def plot_comparison(results: Dict[str, Dict[str, float]], k: int = 5, save_path: str | None = None):
-    """Wykres słupkowy: średnia liczba zarażonych per strategia.
+    """Wykres słupkowy: średnia liczba węzłów dotkniętych do kroku T per strategia.
 
-    Im niższy słupek, tym lepsza obrona. 'none' pokazuje sieć bez obrony,
-    'oracle' to praktyczna górna granica jakości.
+    Im niższy słupek, tym wolniejsza propagacja ataku (lepsza obrona). 'none'
+    pokazuje sieć bez obrony, 'oracle' to praktyczna górna granica jakości.
     """
     import matplotlib.pyplot as plt
 
     # kolejność od najgorszej (none) do najlepszej obrony czytamy z danych
     order = ['none', 'random', 'degree', 'betweenness', 'GNN', 'oracle']
     names = [n for n in order if n in results]
-    means = [results[n]['infected'] for n in names]
-    stds = [results[n]['infected_std'] for n in names]
+    means = [results[n]['affected'] for n in names]
+    stds = [results[n]['affected_std'] for n in names]
 
     colors = {
         'none': '#7f7f7f', 'random': '#bcbd22', 'degree': '#1f77b4',
@@ -204,7 +230,7 @@ def plot_comparison(results: Dict[str, Dict[str, float]], k: int = 5, save_path:
 
     fig, ax = plt.subplots(figsize=(8, 5))
     bars = ax.bar(names, means, yerr=stds, capsize=4, color=bar_colors, alpha=0.85)
-    ax.set_ylabel('Średnia liczba zarażonych węzłów (mniej = lepiej)')
+    ax.set_ylabel('Śr. liczba węzłów dotkniętych do kroku T (mniej = wolniejszy atak)')
     ax.set_title(f'Skuteczność obrony przy budżecie k = {k} utwardzonych węzłów')
     ax.bar_label(bars, fmt='%.1f', padding=3, fontsize=9)
     ax.grid(axis='y', alpha=0.3)
@@ -219,11 +245,12 @@ def plot_comparison(results: Dict[str, Dict[str, float]], k: int = 5, save_path:
 def print_report(results: Dict[str, Dict[str, float]], k: int = 5) -> None:
     """Wypisuje tabelę wyników w konsoli."""
     print(f"\n=== Porównanie strategii obrony (k={k}) ===")
-    print(f"{'strategia':<14}{'zarażeni (śr±std)':<24}{'czas decyzji [ms]':<18}")
-    print("-" * 56)
+    print(f"{'strategia':<14}{'dotknięci do T (śr±std)':<26}"
+          f"{'finalny zasięg':<16}{'czas decyzji [ms]':<18}")
+    print("-" * 74)
     for name, r in results.items():
-        infected = f"{r['infected']:.1f} ± {r['infected_std']:.1f}"
-        print(f"{name:<14}{infected:<24}{r['time'] * 1e3:>10.2f}")
+        affected = f"{r['affected']:.1f} ± {r['affected_std']:.1f}"
+        print(f"{name:<14}{affected:<26}{r['total']:<16.1f}{r['time'] * 1e3:>10.2f}")
 
 
 if __name__ == '__main__':

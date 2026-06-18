@@ -4,7 +4,9 @@ Format obiektu Data:
   x          — cechy węzłów (n, 4): [stopień, betweenness, klastrowanie, closeness],
                wszystkie znormalizowane do [0, 1],
   edge_index — krawędzie (2, 2E): obie orientacje (graf nieskierowany),
-  y          — etykiety wyroczni (n,): gain z utwardzenia węzła,
+  y          — etykiety wyroczni (n,): gain z utwardzenia węzła mierzony na
+               metryce 'affected_within_T' (dotknięci do kroku T) — czuły na
+               oba parametry obrony (resistance + delay),
                znormalizowany max-skalowaniem do [0, 1] wewnątrz każdego grafu.
 """
 from __future__ import annotations
@@ -32,8 +34,9 @@ def build_dataset(
     model: str = 'SI',
     beta: float = 0.3,
     gamma: float = 0.05,
-    resistance: float = 1.0,
-    delay: int = 2,
+    resistance: float = 0.6,
+    delay: int = 5,
+    horizon: int = 10,
     max_steps: int = 100,
     seed: Optional[int] = None,
 ) -> List[Data]:
@@ -56,8 +59,10 @@ def build_dataset(
         beta:       Bazowe prawdopodobieństwo zarażenia przez krawędź.
         gamma:      Prawdopodobieństwo wyzdrowienia (tylko SIR).
         resistance: Uodpornienie utwardzonego węzła przy liczeniu etykiet
-                    (1.0 = pełne; mocniejszy, czytelniejszy sygnał dla GNN).
+                    (0.6 = częściowe; pozwala, by drugi parametr — delay —
+                    też wpływał na etykiety).
         delay:      Opóźnienie rozsiewania utwardzonych węzłów (kroki).
+        horizon:    Horyzont T metryki 'affected_within_T'.
         max_steps:  Maksymalna liczba kroków symulacji.
         seed:       Ziarno losowości dla powtarzalności.
 
@@ -79,8 +84,8 @@ def build_dataset(
         # niż przy niezależnych losowaniach (patrz oracle.py).
         gains = node_marginal_gains_crn(
             G, n_sim=n_sim, beta=beta, resistance=resistance,
-            delay=delay, max_steps=max_steps, model=model, gamma=gamma,
-            base_seed=graph_seed,
+            delay=delay, horizon=horizon, max_steps=max_steps,
+            model=model, gamma=gamma, base_seed=graph_seed,
         )
 
         max_g = float(gains.max())
@@ -123,8 +128,9 @@ def generate_and_save(
     model: str = 'SI',
     beta: float = 0.3,
     gamma: float = 0.05,
-    resistance: float = 1.0,
-    delay: int = 2,
+    resistance: float = 0.6,
+    delay: int = 5,
+    horizon: int = 10,
     max_steps: int = 100,
     seed: int = 42,
 ) -> None:
@@ -132,8 +138,8 @@ def generate_and_save(
     dataset = build_dataset(
         n_graphs=n_graphs, n_nodes=n_nodes, m=m, n_sim=n_sim,
         graph_type=graph_type, model=model, beta=beta, gamma=gamma,
-        resistance=resistance, delay=delay, max_steps=max_steps,
-        seed=seed,
+        resistance=resistance, delay=delay, horizon=horizon,
+        max_steps=max_steps, seed=seed,
     )
     save_dataset(dataset, path)
     d = dataset[0]
@@ -154,8 +160,9 @@ if __name__ == '__main__':
     parser.add_argument('--model',      default='SI', choices=['SI', 'SIR'])
     parser.add_argument('--beta',       type=float, default=0.3)
     parser.add_argument('--gamma',      type=float, default=0.05)
-    parser.add_argument('--resistance', type=float, default=1.0)
-    parser.add_argument('--delay',      type=int,   default=2)
+    parser.add_argument('--resistance', type=float, default=0.6)
+    parser.add_argument('--delay',      type=int,   default=5)
+    parser.add_argument('--horizon',    type=int,   default=10)
     parser.add_argument('--seed',       type=int,   default=42)
     args = parser.parse_args()
 
